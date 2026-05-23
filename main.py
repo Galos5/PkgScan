@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, HTTPException
 from pydantic import BaseModel
 from typing import List
 from sqlalchemy.orm import Session
@@ -8,10 +8,19 @@ from concurrent.futures import ThreadPoolExecutor
 from models import ScanModel, ScanPackageModel, VulnerabilityCacheModel
 from database import engine, get_db
 import models
+from fastapi.middleware.cors import CORSMiddleware
 
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="PkgScan Server")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class PackageInfo(BaseModel):
@@ -25,37 +34,78 @@ class ScanRequest(BaseModel):
     packages: List[PackageInfo]
 
 
-def check_package_against_osv(ecosystem: str, name: str, version: str) -> dict:
+def is_version_vulnerable_pure(ecosystem: str, name: str, version: str) -> bool:
     url = "https://api.osv.dev/v1/query"
-    ecosystem_mapping = {
-        "npm": "npm",
-        "pypi": "PyPI",
-        "nuget": "NuGet",
-        "go": "Go"
-    }
-
-    osv_ecosystem = ecosystem_mapping.get(ecosystem.lower(), ecosystem)
     payload = {
-        "package": {"name": name, "ecosystem": osv_ecosystem},
-        "version": version
+        "version": version,
+        "package": {"name": name, "ecosystem": ecosystem}
+    }
+    try:
+        response = requests.post(url, json=payload, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            if "vulns" in data and len(data["vulns"]) > 0:
+                return True
+    except Exception as e:
+        print(f"Error doing pure vulnerability check: {e}")
+    return False
+
+
+def check_package_against_osv(ecosystem: str, name: str, version: str):
+    url = "https://api.osv.dev/v1/query"
+    payload = {
+        "version": version,
+        "package": {"name": name, "ecosystem": ecosystem}
     }
 
     try:
         response = requests.post(url, json=payload, timeout=5)
-        response.raise_for_status()
-        data = response.json()
+        if response.status_code == 200:
+            data = response.json()
+            if "vulns" in data and len(data["vulns"]) > 0:
+                vuln_entries = data["vulns"]
+                details_list = [v.get("summary", v.get("details", "")) for v in vuln_entries]
+                combined_details = " | ".join(details_list)
 
-        if not data or "vulns" not in data:
-            return {"status": "SAFE", "details": "No known vulnerabilities found in OSV database."}
+                has_any_fix_at_all = False
+                patched_version = None
 
-        first_vuln = data["vulns"][0]
-        return {
-            "status": "VULNERABLE",
-            "details": f"{first_vuln.get('id', 'Unknown ID')}: {first_vuln.get('summary', 'No summary')}"
-        }
+                for vuln in vuln_entries:
+                    for affected in vuln.get("affected", []):
+                        for r in affected.get("ranges", []):
+                            for event in r.get("events", []):
+                                if "fixed" in event:
+                                    potential_fix = event["fixed"]
+                                    has_any_fix_at_all = True
+
+                                    is_unstable = any(
+                                        keyword in potential_fix.lower() for keyword in ["beta", "alpha", "rc", "pre"])
+                                    if is_unstable:
+                                        continue
+
+                                    is_fix_vulnerable = is_version_vulnerable_pure(ecosystem, name, potential_fix)
+                                    if is_fix_vulnerable:
+                                        continue
+
+                                    patched_version = potential_fix
+                                    break
+                            if patched_version:
+                                break
+                        if patched_version:
+                            break
+                    if patched_version:
+                        break
+
+                # אם גוגל הציע פאטץ' אבל הפונקציה שלנו פסלה אותו
+                if has_any_fix_at_all and not patched_version:
+                    return "VULNERABLE", combined_details, "UNSAFE_FIX_FOUND"
+
+                return "VULNERABLE", combined_details, patched_version
+
+            return "SAFE", "No vulnerabilities found", None
     except Exception as e:
-        return {"status": "UNKNOWN", "details": f"Failed to scan against OSV: {str(e)}"}
-
+        print(f"Error querying OSV: {e}")
+        return "ERROR", "Error querying OSV", None
 
 @app.get("/")
 def read_root():
@@ -84,7 +134,8 @@ def scan_dependencies(request: ScanRequest, db: Session = Depends(get_db)):
                 "pkg_object": pkg,
                 "cache_key": cache_key,
                 "status": cached_item.status,
-                "details": cached_item.details
+                "details": cached_item.details,
+                "patched_version": cached_item.patched_version
             })
         else:
             packages_to_query_online.append({
@@ -95,12 +146,13 @@ def scan_dependencies(request: ScanRequest, db: Session = Depends(get_db)):
     if packages_to_query_online:
         def fetch_worker(item):
             pkg = item["pkg_object"]
-            res = check_package_against_osv(pkg.ecosystem, pkg.name, pkg.version)
+            status, details, patched_version = check_package_against_osv(pkg.ecosystem, pkg.name, pkg.version)
             return {
                 "pkg_object": pkg,
                 "cache_key": item["cache_key"],
-                "status": res["status"],
-                "details": res["details"]
+                "status": status,
+                "details": details,
+                "patched_version": patched_version
             }
 
         with ThreadPoolExecutor(max_workers=15) as executor:
@@ -112,12 +164,14 @@ def scan_dependencies(request: ScanRequest, db: Session = Depends(get_db)):
             if existing_cache:
                 existing_cache.status = res["status"]
                 existing_cache.details = res["details"]
+                existing_cache.patched_version = res["patched_version"]
                 existing_cache.last_scanned_at = datetime.utcnow()
             else:
                 new_cache_entry = models.VulnerabilityCacheModel(
                     package_key=res["cache_key"],
                     status=res["status"],
-                    details=res["details"]
+                    details=res["details"],
+                    patched_version=res["patched_version"]
                 )
                 db.add(new_cache_entry)
 
@@ -137,7 +191,8 @@ def scan_dependencies(request: ScanRequest, db: Session = Depends(get_db)):
             "version": pkg.version,
             "ecosystem": pkg.ecosystem,
             "status": item["status"],
-            "details": item["details"]
+            "details": item["details"],
+            "patched_version": item["patched_version"]
         })
 
     db.commit()
@@ -171,7 +226,8 @@ def get_vulnerabilities_report(endpoint_id: str, db: Session = Depends(get_db)):
                 "name": pkg.name,
                 "version": pkg.version,
                 "ecosystem": pkg.ecosystem,
-                "details": cache_item.details
+                "details": cache_item.details,
+                "patched_version": cache_item.patched_version
             })
 
     return {

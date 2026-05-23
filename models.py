@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Boolean
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from database import Base
@@ -31,5 +31,6 @@ class VulnerabilityCacheModel(Base):
     id = Column(Integer, primary_key=True, index=True)
     package_key = Column(String, unique=True, index=True, nullable=False)
     status = Column(String, nullable=False)
-    details = Column(String, nullable=True)
+    details = Column(Text, nullable=True)
+    patched_version = Column(String, nullable=True)
     last_scanned_at = Column(DateTime, default=datetime.utcnow)
