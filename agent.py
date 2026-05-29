@@ -1,5 +1,6 @@
 import os
 import json
+import socket
 import requests
 
 SERVER_URL = "http://127.0.0.1:8000/api/scan"
@@ -87,8 +88,13 @@ def run_agent():
 
     unique_packages = [dict(t) for t in {tuple(d.items()) for d in all_discovered_packages}]
 
-    print(f"\n[+] Scan finished. Found {len(unique_packages)} unique packages.")
-    send_to_server("Gal-Laptop-Agent-v2", unique_packages)
+    hostname = socket.gethostname()
+    endpoint_id = f"{hostname}-Agent"
+
+    print(f"\n[+] Local scan finished. Found {len(unique_packages)} unique packages.")
+    print("[*] Sending data to server for vulnerability analysis...")
+
+    send_to_server(endpoint_id, unique_packages)
 
 
 def send_to_server(endpoint_id: str, packages: list):
@@ -100,30 +106,23 @@ def send_to_server(endpoint_id: str, packages: list):
     num_packages = len(packages)
     dynamic_timeout = 5 + (num_packages * 0.5)
 
-    print(f"[*] Calculated dynamic timeout: {dynamic_timeout} seconds for {num_packages} packages.")
-
     try:
         response = requests.post(SERVER_URL, json=payload, timeout=dynamic_timeout)
 
         if response.status_code == 200:
             server_data = response.json()
-            print("\n=== SECURITY SCAN REPORT ===")
 
-            vulnerable_count = 0
-            for res in server_data.get("results", []):
-                if res["status"] == "VULNERABLE":
-                    icon = "❌"
-                    vulnerable_count += 1
-                else:
-                    icon = "✅"
+            vulnerable_count = sum(1 for res in server_data.get("results", []) if res["status"] == "VULNERABLE")
 
-                print(f"{icon} [{res['ecosystem'].upper()}] {res['name']} (v{res['version']}) -> {res['status']}")
-                if res["details"]:
-                    print(f"   Details: {res['details']}")
+            print("\n=========================================")
+            print("✅ Scan Completed Successfully!")
+            print(f"📊 Summary: Scanned {num_packages} packages, Found {vulnerable_count} vulnerabilities.")
+            print("=========================================")
+            print(f"🔍 Your Endpoint ID is: {endpoint_id}")
+            print("👉 To view the full security report, go to your PkgScan Dashboard:")
+            print("   http://localhost:5173")
+            print("=========================================\n")
 
-            print("============================")
-            print(f"[!] Scan completed: Found {vulnerable_count} vulnerabilities out of {num_packages} packages.")
-            print("============================\n")
         else:
             print(f"[-] Server error {response.status_code}: {response.text}")
     except requests.exceptions.Timeout:

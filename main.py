@@ -96,7 +96,6 @@ def check_package_against_osv(ecosystem: str, name: str, version: str):
                     if patched_version:
                         break
 
-                # אם גוגל הציע פאטץ' אבל הפונקציה שלנו פסלה אותו
                 if has_any_fix_at_all and not patched_version:
                     return "VULNERABLE", combined_details, "UNSAFE_FIX_FOUND"
 
