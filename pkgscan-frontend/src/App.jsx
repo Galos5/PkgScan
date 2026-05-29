@@ -57,7 +57,7 @@ function App() {
               <Search size={20} color="#64748b" style={{ position: 'absolute', left: '1rem' }} />
               <input
                 type="text"
-                placeholder="Enter Endpoint ID (e.g., Gal-Laptop-Agent-v2)"
+                placeholder="Enter Endpoint ID"
                 value={endpointId}
                 onChange={(e) => setEndpointId(e.target.value)}
                 style={{ width: '100%', backgroundColor: '#0f172a', border: '1px solid #475569', borderRadius: '8px', padding: '0.75rem 1rem 0.75rem 3rem', color: '#fff', fontSize: '1rem', outline: 'none' }}
