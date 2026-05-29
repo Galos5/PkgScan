@@ -2,6 +2,8 @@ import os
 import json
 import socket
 import requests
+from rich.console import Console
+
 
 SERVER_URL = "http://127.0.0.1:8000/api/scan"
 
@@ -106,8 +108,11 @@ def send_to_server(endpoint_id: str, packages: list):
     num_packages = len(packages)
     dynamic_timeout = 5 + (num_packages * 0.5)
 
+    console = Console()
+
     try:
-        response = requests.post(SERVER_URL, json=payload, timeout=dynamic_timeout)
+        with console.status("[bold cyan]Analyzing vulnerabilities on server...", spinner="bouncingBar"):
+            response = requests.post(SERVER_URL, json=payload, timeout=dynamic_timeout)
 
         if response.status_code == 200:
             server_data = response.json()
