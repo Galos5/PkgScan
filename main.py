@@ -102,6 +102,10 @@ def check_package_against_osv(ecosystem: str, name: str, version: str):
                 return "VULNERABLE", combined_details, patched_version
 
             return "SAFE", "No vulnerabilities found", None
+        else:
+            print(f"OSV returned HTTP {response.status_code} for package {name}")
+            return "ERROR", f"OSV request failed (HTTP {response.status_code})", None
+
     except Exception as e:
         print(f"Error querying OSV: {e}")
         return "ERROR", "Error querying OSV", None
