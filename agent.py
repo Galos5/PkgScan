@@ -7,6 +7,26 @@ from rich.console import Console
 
 SERVER_URL = "http://127.0.0.1:8000/api/scan"
 
+def extract_pip_packages(file_path: str) -> list:
+    packages = []
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "==" in line:
+                    name, version = line.split("==", 1)
+                    packages.append({
+                        "name": name.strip(),
+                        "version": version.strip(),
+                        "ecosystem": "PyPI"
+                    })
+                else:
+                    print(f"[!] Skipping unpinned requirement (not checked): {line}")
+    except Exception as e:
+        print(f"[-] Error reading {file_path}: {e}")
+    return packages
 
 def extract_npm_packages(file_path: str) -> list:
     packages = []
@@ -24,6 +44,8 @@ def extract_npm_packages(file_path: str) -> list:
         print(f"[-] Error reading {file_path}: {e}")
     return packages
 
+PARSERS = {"requirements.txt": extract_pip_packages,
+           "package.json": extract_npm_packages}
 
 def scan_directory(target_dir: str) -> list:
     found_packages = []
@@ -36,10 +58,10 @@ def scan_directory(target_dir: str) -> list:
             ]]
 
             for file in files:
-                if file == "package.json":
+                if file in PARSERS:
                     full_path = os.path.join(root, file)
                     print(f"[+] Found config: {full_path}")
-                    found_packages.extend(extract_npm_packages(full_path))
+                    found_packages.extend(PARSERS[file](full_path))
     except PermissionError:
         pass
     except Exception as e:
