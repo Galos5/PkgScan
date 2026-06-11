@@ -163,6 +163,11 @@ def scan_dependencies(request: ScanRequest, db: Session = Depends(get_db)):
 
         for res in online_results:
             scan_results.append(res)
+            # ERROR is a transient failure of the check itself, not a fact about
+            # the package. Caching it would hide the package from re-checks (and
+            # from the report) for 24h - a false-negative window.
+            if res["status"] == "ERROR":
+                continue
             existing_cache = db.query(models.VulnerabilityCacheModel).filter_by(package_key=res["cache_key"]).first()
             if existing_cache:
                 existing_cache.status = res["status"]
