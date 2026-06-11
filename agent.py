@@ -118,10 +118,13 @@ def send_to_server(endpoint_id: str, packages: list):
             server_data = response.json()
 
             vulnerable_count = sum(1 for res in server_data.get("results", []) if res["status"] == "VULNERABLE")
+            failed_count = sum(1 for res in server_data.get("results", []) if res["status"] == "ERROR")
 
             print("\n=========================================")
             print("✅ Scan Completed Successfully!")
             print(f"📊 Summary: Scanned {num_packages} packages, Found {vulnerable_count} vulnerabilities.")
+            if failed_count != 0:
+                print(f"⚠️ Could not check {failed_count} packages - results are incomplete!")
             print("=========================================")
             print(f"🔍 Your Endpoint ID is: {endpoint_id}")
             print("👉 To view the full security report, go to your PkgScan Dashboard:")
