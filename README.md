@@ -1,48 +1,112 @@
-# PkgScan 🚀
+# PkgScan
 
-PkgScan is an enterprise-grade vulnerability scanning system designed to detect security flaws in open-source packages across developer endpoints. The system consists of a lightweight, secure local agent, a high-performance FastAPI backend, and an interactive React web dashboard that visualizes security posture and provides safe remediation advice.
+An end-to-end vulnerability monitoring system for developer endpoints: a local agent scans machines for project dependency files, a FastAPI backend checks every package against the [OSV.dev](https://osv.dev) vulnerability database, and a React dashboard shows each endpoint's security posture — including what could **not** be checked, so a partial scan never masquerades as a clean one.
 
-## Architecture Overview
+```
+┌──────────────┐   POST /api/scan    ┌──────────────────┐   query    ┌─────────┐
+│  Agent (CLI) │ ──────────────────► │  FastAPI Server  │ ─────────► │ OSV.dev │
+│  scans disk  │                     │  + SQLite cache  │ ◄───────── │   API   │
+└──────────────┘                     └──────────────────┘            └─────────┘
+                                              ▲
+                                              │ GET /api/reports/{endpoint_id}
+                                     ┌────────┴─────────┐
+                                     │  React Dashboard │
+                                     └──────────────────┘
+```
 
-The system is built with a focus on performance, scalability, and security:
+## Supported ecosystems
 
-* **PkgScan Agent (`agent.py`)**: A lightweight client that recursively scans specified directories for `package.json` files, extracts dependency metadata surgically without risking data leaks, and securely transmits payloads using an adaptive timeout algorithm.
-* **PkgScan Server (`main.py`)**: A FastAPI backend that coordinates vulnerability lookups, stores comprehensive scan histories using SQLAlchemy with SQLite, and minimizes external network overhead through an optimized caching strategy.
-* **React Dashboard (`App.jsx`)**: A beautiful, responsive Dark-Mode UI that connects to the backend API, displays active endpoint vulnerabilities, and presents clear remediation advice for engineers.
+| Ecosystem | Manifest file      | Notes                                              |
+| --------- | ------------------ | -------------------------------------------------- |
+| npm       | `package.json`     | `dependencies` + `devDependencies`                 |
+| PyPI      | `requirements.txt` | Pinned (`==`) entries only; others skipped loudly  |
 
-## Key Engineering Features
+Parsers are registered in a filename → function dict (`PARSERS` in `agent.py`). Adding a new ecosystem means writing one parser function and one registry line — the directory-scanning logic is never touched.
 
-### 1. High-Performance Concurrency (Thread Pool)
-To solve the $N+1$ query bottleneck during cold-start cache misses, the backend implements a concurrent lookup engine using Python's `concurrent.futures.ThreadPoolExecutor`. Instead of executing sequential blocking HTTP requests to the Google OSV API, the server fires parallel workers (up to 15 concurrent threads). This optimization reduced total processing time for large-scale scans (100+ packages) from **~55 seconds down to under 3 seconds**.
+## Quick start
 
-### 2. Strict Remediation Validation (Anti-Chained Vulnerabilities)
-Unlike basic scanning tools that blindly suggest the next available version, PkgScan implements a **Strict Recursive Verification Loop**. When a potential fix version is extracted from Google OSV, the backend automatically queries the API *again* to verify that the suggested patch does not introduce new or chained vulnerabilities. If a patch exists but contains flaws, the system flags it accordingly.
+Prerequisites: Python 3.13+, Node.js 18+.
 
-### 3. Pre-Release & Unstable Version Filtering
-The backend remediation engine automatically purges and skips `beta`, `alpha`, `rc` (Release Candidates), and `pre` versions from its upgrade advice. This ensures that enterprise developers are never prompted to install unstable packages into critical systems.
+**1. Server**
 
-### 4. Adaptive Client-Side Timeout
-To prevent premature request drops while maintaining resource efficiency, the agent calculates a dynamic network timeout based on the input payload size:
-$$\text{Timeout} = 5s + (\text{Number of Packages} \times 0.5s)$$
-This gives the server the necessary breathing room to process bulk imports during cache misses, while enforcing strict, short constraints for smaller, everyday scans.
+```bash
+pip install -r requirements.txt
+uvicorn main:app --reload          # http://127.0.0.1:8000 (docs at /docs)
+```
 
-### 5. Surgical Zero-Leak Directory Scanning
-The local agent enforces a strict $O(1)$ filename filter matching only exact configuration targets (`package.json`). It completely avoids reading raw source code, assets, or personal binaries, preventing data exfiltration and ensuring a zero-leak pipeline.
+**2. Agent** (second terminal)
 
-### 6. Smart Caching Layer & SQL Join Optimization
-The backend implements a 24-hour Time-To-Live (TTL) cache. For data rendering, the targeted security reporting endpoint (`GET /api/reports/{endpoint_id}`) avoids iterative database queries by performing a singular, highly efficient relational join between the scan history and the vulnerability cache tables.
+```bash
+python agent.py
+```
 
-## API Endpoints
+Choose scan mode `3` (Custom) and point it at the bundled demo project:
 
-| Method | Endpoint | Description |
-| :--- | :--- | :--- |
-| `POST` | `/api/scan` | Receives endpoints dependencies, executes concurrent OSV lookups, populates cache, and logs scan history. |
-| `GET` | `/api/reports/{endpoint_id}` | Returns a refined, high-priority security report containing only `VULNERABLE` assets for a specific machine. |
-| `GET` | `/` | Health check endpoint confirming server operational status. |
+```
+examples/demo-project
+```
 
-## Tech Stack
+It contains deliberately vulnerable pinned dependencies (npm + PyPI), so a scan returns real findings in seconds. The agent prints your endpoint ID when done.
 
-* **Frontend**: React.js, Vite, Lucide Icons, Custom CSS Matrix
-* **Backend**: FastAPI, Uvicorn, Concurrent Threading
-* **Database & ORM**: SQLite, SQLAlchemy
-* **Networking**: Requests (Python), Fetch API (JavaScript)
+**3. Dashboard** (third terminal)
+
+```bash
+cd pkgscan-frontend
+npm install
+npm run dev                        # http://localhost:5173
+```
+
+Search for your endpoint ID to see the report.
+
+## How it works
+
+1. **Agent** walks the chosen directories (skipping `node_modules`, virtualenvs, system folders), parses every manifest it has a registered parser for, de-duplicates the packages, and POSTs them to the server.
+2. **Server** checks each package against a 24-hour cache; cache misses are queried against OSV.dev concurrently (`ThreadPoolExecutor`, 15 workers). Results are written both to the cache and to an immutable per-scan snapshot.
+3. **Report** is served from the scan snapshot — what you see is what that scan actually found, even if newer data exists in the cache.
+
+## Design decisions
+
+**Scans are immutable snapshots.** Each scan stores its own per-package results (`scan_packages` table) instead of pointing at the live cache. Historical reports never change retroactively, and the report endpoint reads them back with two queries total — no per-package lookups.
+
+**Failed checks are first-class, never silent.** If OSV can't be reached for a package (timeout, rate-limit, 5xx), that package is reported as *unchecked* — in the agent's terminal summary, in the API response (`failed_checks`), and on the dashboard (an "Incomplete Scan" status replaces the green badge). A scan that couldn't verify everything never claims everything is safe.
+
+**Transient errors are not cached.** A failed check is a fact about the network, not about the package. Caching it would suppress re-checks for 24 hours and silently hide the package from reports — a false-negative window. Errors skip the cache entirely; the previous known-good result, if any, is preserved.
+
+**Remediation advice is verified before it's given.** A suggested fix version is itself checked against OSV (to avoid recommending a version with known chained vulnerabilities), and pre-release versions (`alpha`, `beta`, `rc`) are never suggested.
+
+**Unparseable input is skipped loudly.** Unpinned requirements (`flask>=2.0`), includes (`-r`), and editable installs can't be checked reliably against OSV, so the agent skips them **with a warning** rather than guessing or staying quiet.
+
+## API
+
+| Method | Endpoint                     | Description                                                                  |
+| ------ | ---------------------------- | ---------------------------------------------------------------------------- |
+| `POST` | `/api/scan`                  | Accepts `{endpoint_id, packages[]}`, runs cached/concurrent OSV checks, persists a scan snapshot, returns per-package results. |
+| `GET`  | `/api/reports/{endpoint_id}` | Latest scan for an endpoint: vulnerabilities (with patched version when a safe one exists) and failed checks. |
+| `GET`  | `/`                          | Health check.                                                                |
+
+Interactive API docs (Swagger UI) are auto-generated at `http://127.0.0.1:8000/docs`.
+
+## Project structure
+
+```
+agent.py                      # CLI agent: directory walking + parser registry
+main.py                       # FastAPI app: scan endpoint, OSV client, report endpoint
+models.py                     # SQLAlchemy models: scans, scan_packages, vulnerability_cache
+database.py                   # Engine / session setup (SQLite)
+examples/demo-project/        # Deliberately vulnerable manifests for demos & testing
+pkgscan-frontend/             # React + Vite dashboard
+```
+
+## Tech stack
+
+**Backend:** Python, FastAPI, SQLAlchemy, SQLite · **Agent:** Python, Rich · **Frontend:** React, Vite, lucide-react · **Data source:** [OSV.dev](https://osv.dev) (Google Open Source Vulnerabilities)
+
+## Roadmap
+
+- Test suite (pytest) with a mocked OSV client
+- Dashboard-triggered scans (agent as a polling service with a job queue)
+- Re-scan failed checks only
+- Show last known result for packages whose current check failed
+- Lock-file parsing (`package-lock.json`, `poetry.lock`) for resolved versions
+- Async scan endpoint + OSV batch queries
+- Database migrations (Alembic) ahead of a PostgreSQL move
