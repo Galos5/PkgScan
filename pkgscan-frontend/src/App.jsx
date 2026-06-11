@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Shield, ShieldAlert, ShieldCheck, Search, Laptop, Loader2, Info } from 'lucide-react';
+import { Shield, ShieldAlert, ShieldCheck, Search, Laptop, Loader2, Info, AlertTriangle } from 'lucide-react';
 
 function App() {
   const [endpointId, setEndpointId] = useState('');
@@ -94,11 +94,25 @@ function App() {
               </div>
 
               <div style={{ backgroundColor: '#1e293b', padding: '1.5rem', borderRadius: '12px', border: '1px solid #334155', display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                {report.total_vulnerabilities > 0 ? <ShieldAlert size={32} color="#ef4444" /> : <ShieldCheck size={32} color="#22c55e" />}
+                {report.total_vulnerabilities > 0 ? <ShieldAlert size={32} color="#ef4444" />
+                  : report.total_failed_checks > 0 ? <AlertTriangle size={32} color="#f97316" />
+                  : <ShieldCheck size={32} color="#22c55e" />}
                 <div>
                   <div style={{ fontSize: '0.875rem', color: '#94a3b8' }}>Security Status</div>
-                  <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: report.total_vulnerabilities > 0 ? '#ef4444' : '#22c55e' }}>
-                    {report.total_vulnerabilities > 0 ? `${report.total_vulnerabilities} Vulnerabilities` : 'Secured / Safe'}
+                  <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: report.total_vulnerabilities > 0 ? '#ef4444' : report.total_failed_checks > 0 ? '#f97316' : '#22c55e' }}>
+                    {report.total_vulnerabilities > 0 ? `${report.total_vulnerabilities} Vulnerabilities`
+                      : report.total_failed_checks > 0 ? 'Incomplete Scan'
+                      : 'Secured / Safe'}
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ backgroundColor: '#1e293b', padding: '1.5rem', borderRadius: '12px', border: '1px solid #334155', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                {report.total_failed_checks > 0 ? <AlertTriangle size={32} color="#f97316" /> : <ShieldCheck size={32} color="#22c55e" />}
+                <div>
+                  <div style={{ fontSize: '0.875rem', color: '#94a3b8' }}>Unchecked Packages</div>
+                  <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: report.total_failed_checks > 0 ? '#f97316' : '#22c55e' }}>
+                    {report.total_failed_checks ?? 0}
                   </div>
                 </div>
               </div>
@@ -175,6 +189,37 @@ function App() {
                 </table>
               )}
             </div>
+
+            {/* Failed Checks Table - only rendered when the scan was incomplete */}
+            {report.total_failed_checks > 0 && (
+              <div style={{ backgroundColor: '#1e293b', borderRadius: '12px', border: '1px solid #f97316', overflow: 'hidden', marginTop: '2rem' }}>
+                <div style={{ padding: '1.25rem 1.5rem', borderBottom: '1px solid #334155', fontWeight: 'bold', fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#f97316' }}>
+                  <AlertTriangle size={20} />
+                  Unchecked Packages - Scan Incomplete
+                </div>
+                <div style={{ padding: '0.75rem 1.5rem', color: '#94a3b8', fontSize: '0.875rem', borderBottom: '1px solid #334155' }}>
+                  The following packages could not be verified against the vulnerability database. Their security status is unknown.
+                </div>
+                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                  <thead>
+                    <tr style={{ backgroundColor: '#0f172a', color: '#94a3b8', fontSize: '0.875rem' }}>
+                      <th style={{ padding: '1rem 1.5rem' }}>Package Name</th>
+                      <th style={{ padding: '1rem 1.5rem' }}>Current Version</th>
+                      <th style={{ padding: '1rem 1.5rem' }}>Failure Reason</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {report.failed_checks.map((pkg, index) => (
+                      <tr key={index} style={{ borderBottom: index === report.failed_checks.length - 1 ? 'none' : '1px solid #334155' }}>
+                        <td style={{ padding: '1rem 1.5rem', fontWeight: '600', color: '#fdba74' }}>{pkg.name}</td>
+                        <td style={{ padding: '1rem 1.5rem', color: '#cbd5e1' }}>v{pkg.version}</td>
+                        <td style={{ padding: '1rem 1.5rem', color: '#94a3b8', fontSize: '0.875rem' }}>{pkg.details}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </section>
         )}
       </main>
