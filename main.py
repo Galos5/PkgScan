@@ -190,7 +190,10 @@ def scan_dependencies(request: ScanRequest, db: Session = Depends(get_db)):
             scan_id=new_scan.id,
             name=pkg.name,
             version=pkg.version,
-            ecosystem=pkg.ecosystem
+            ecosystem=pkg.ecosystem,
+            status=item["status"],
+            details=item["details"],
+            patched_version=item["patched_version"]
         )
         db.add(new_package)
 
@@ -224,18 +227,21 @@ def get_vulnerabilities_report(endpoint_id: str, db: Session = Depends(get_db)):
 
     scan_packages = db.query(ScanPackageModel).filter(ScanPackageModel.scan_id == latest_scan.id).all()
     issues = []
-
+    failed_checks = []
     for pkg in scan_packages:
-        cache_key = f"{pkg.ecosystem.lower()}:{pkg.name.lower()}:{pkg.version}"
-        cache_item = db.query(VulnerabilityCacheModel).filter(VulnerabilityCacheModel.package_key == cache_key).first()
-
-        if cache_item and cache_item.status == "VULNERABLE":
+        if pkg.status == "VULNERABLE":
             issues.append({
                 "name": pkg.name,
                 "version": pkg.version,
                 "ecosystem": pkg.ecosystem,
-                "details": cache_item.details,
-                "patched_version": cache_item.patched_version
+                "details": pkg.details,
+                "patched_version": pkg.patched_version
+            })
+        elif pkg.status == "ERROR":
+            failed_checks.append({
+                "name": pkg.name,
+                "version": pkg.version,
+                "details": pkg.details,
             })
 
     return {
@@ -243,5 +249,8 @@ def get_vulnerabilities_report(endpoint_id: str, db: Session = Depends(get_db)):
         "scan_id": latest_scan.id,
         "scanned_at": latest_scan.created_at.strftime("%Y-%m-%d %H:%M:%S"),
         "total_vulnerabilities": len(issues),
-        "vulnerabilities": issues
+        "vulnerabilities": issues,
+        "total_failed_checks": len(failed_checks),
+        "failed_checks": failed_checks
+
     }

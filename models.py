@@ -22,6 +22,10 @@ class ScanPackageModel(Base):
     version = Column(String)
     ecosystem = Column(String)
 
+    status = Column(String, nullable=False)
+    details = Column(Text, nullable=True)
+    patched_version = Column(String, nullable=True)
+
     scan = relationship("ScanModel", back_populates="packages")
 
 
